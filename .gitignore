@@ -1,0 +1,3 @@
+strava_data/
+__pycache__/
+strava_secrets.json
