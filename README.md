@@ -1,6 +1,6 @@
 # Strava 近 42 天训练数据工具
 
-这是一个只使用 Python 标准库的本地命令行工具。它读取 Strava API 提供的活动详情和高分辨率 streams，保存 JSON、CSV 和 TCX，便于 Codex 分析间歇训练、CP5 等短时表现。
+这是一个本地命令行工具，可从 Strava API 获取活动数据，也可批量导入本地 FIT 文件，生成 JSON、CSV 和 TCX，供 Codex 分析间歇训练、CP5 等短时表现。API 模式只使用 Python 标准库；FIT 导入需要安装 `requirements.txt` 中的解析库。
 
 ## 首次授权
 
@@ -39,13 +39,34 @@ python .\strava_tool.py fetch
 
 这些是 Strava API 提供的活动详情，不等同于设备原始 FIT 文件。TCX 由活动详情和 streams 生成；未上传到 Strava 或 API 未提供的传感器数据不会出现在导出中。单项 JSON 保留完整 API stream 序列，是做细节分析的主要数据源。
 
+## 从 FIT 文件导入
+
+1. 将 `.fit` 文件放入仓库根目录的 `fit_import/` 文件夹，也可以放在其子文件夹中。此目录已被 Git 忽略。
+2. 首次使用时安装 FIT 解析依赖：
+
+   ```powershell
+   python -m pip install -r requirements.txt
+   ```
+
+3. 运行导入命令：
+
+   ```powershell
+   python .\strava_tool.py import-fit
+   ```
+
+默认只保留活动开始时间在当前 UTC 时间往前 42 天内的文件。可用 `--days 90` 改窗口，或用 `--input "D:\Activities\FIT"` 指定其他目录。程序会递归扫描 `.fit` 文件、跳过重复文件，并直接生成与 API 模式相同布局的 `activities_42days.json`、CSV、`activity_details/{id}.json` 和 TCX；FIT 生成的活动 ID 是文件内容的稳定本地标识，索引的 `source` 会标明数据来自 FIT。若最近 42 天没有活动，索引会是空列表。
+
+FIT 里实际存在的时间、距离、GPS、海拔、速度、心率、踏频、功率、温度和 laps 会写入对应的 streams/字段；文件没有提供的数据保持缺失。若文件提供本地时间戳，索引会记录 FIT 中的 UTC offset；否则按 UTC 标注。
+
+Codex 在仓库内分析时可先运行 `python .\strava_tool.py import-fit --if-present`：存在默认 FIT 导入目录和文件时，程序自动完成筛选与转换；没有 FIT 文件时，程序不改动现有 API 数据。导入与 API 抓取写入相同的窗口文件名，因此每次运行会更新该窗口索引，不会把两个来源自动合并。原始 FIT 文件不会被修改或删除。
+
 ## 上传到 GitHub
 
-仓库忽略 `strava_data/` 和 `strava_secrets*.json`，公开模板 `strava_secrets_sample.json` 是例外。活动数据可能包含精确路线、活动时间、心率和功率等个人信息；不要用 `git add -f` 强行提交这些本地文件。
+仓库忽略 `strava_data/`、`fit_import/` 和 `strava_secrets*.json`，公开模板 `strava_secrets_sample.json` 是例外。活动数据可能包含精确路线、活动时间、心率和功率等个人信息；不要用 `git add -f` 强行提交这些本地文件。
 
 ## 用 Codex 读取与分析
 
-仓库中的 `skills/strava-analysis/` 是可单独安装的 Codex Skill，提供读取 Strava JSON、CSV、TCX 并分析训练数据的指引；Skill 不含个人活动数据或 API 凭据。
+仓库中的 `skills/strava-analysis/` 是可单独安装的 Codex Skill，提供导入 FIT 并分析统一 Strava 风格 JSON、CSV、TCX 的指引；Skill 不含个人活动数据或 API 凭据。
 
 让 Codex 先读 `strava_data/activities_42days.json`，再根据每项活动的 `local_files.json` 路径读取完整记录。逐项 JSON 的 `streams` 可能包含：
 

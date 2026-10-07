@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch recent Strava activity summaries into local JSON and CSV files."""
+"""Fetch Strava activities or import local FIT files into analysis-ready files."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ FIELDS = [
     "timezone", "distance", "moving_time", "elapsed_time",
     "total_elevation_gain", "elev_high", "elev_low", "average_speed",
     "max_speed", "average_heartrate", "max_heartrate", "average_watts",
-    "max_watts", "kilojoules", "device_watts", "trainer", "commute",
+    "max_watts", "average_cadence", "kilojoules", "device_watts", "trainer", "commute",
     "manual", "gear_id", "achievement_count", "kudos_count",
     "comment_count", "photo_count", "suffer_score",
 ]
@@ -263,7 +263,9 @@ def add_number(parent: ET.Element, name: str, value: Any) -> None:
         ET.SubElement(parent, f"{{{TCX_NS}}}{name}").text = str(value)
 
 
-def build_tcx(record: dict[str, Any], path: Path) -> None:
+def build_tcx(
+    record: dict[str, Any], path: Path, *, creator_name: str = "Strava API"
+) -> None:
     """Write one TCX activity, including the available high-resolution streams."""
     activity = record.get("activity") or {}
     summary = record.get("summary") or {}
@@ -294,10 +296,12 @@ def build_tcx(record: dict[str, Any], path: Path) -> None:
     if name:
         ET.SubElement(activity_el, q("Notes")).text = str(name)
 
-    elapsed = activity.get("elapsed_time") or summary.get("elapsed_time") or 0
+    elapsed = activity.get("elapsed_time")
+    if elapsed is None:
+        elapsed = summary.get("elapsed_time")
     distance = activity.get("distance")
     if distance is None:
-        distance = summary.get("distance", 0)
+        distance = summary.get("distance")
     lap = ET.SubElement(activity_el, q("Lap"), {"StartTime": format_datetime(start)})
     add_number(lap, "TotalTimeSeconds", elapsed)
     add_number(lap, "DistanceMeters", distance)
@@ -306,7 +310,9 @@ def build_tcx(record: dict[str, Any], path: Path) -> None:
         ("MaximumHeartRateBpm", "max_heartrate"),
     ]
     for element_name, field in lap_stats:
-        value = activity.get(field) or summary.get(field)
+        value = activity.get(field)
+        if value is None:
+            value = summary.get(field)
         if value is not None:
             hr = ET.SubElement(lap, q(element_name))
             ET.SubElement(hr, q("Value")).text = str(int(value))
@@ -352,7 +358,7 @@ def build_tcx(record: dict[str, Any], path: Path) -> None:
                 add_number(tpx, "Watts", watts[index])
 
     creator = ET.SubElement(activity_el, q("Creator"), {f"{{{XSI_NS}}}type": "tcx:Device_t"})
-    ET.SubElement(creator, q("Name")).text = "Strava API"
+    ET.SubElement(creator, q("Name")).text = creator_name
     ET.SubElement(creator, q("UnitId")).text = "0"
     ET.SubElement(creator, q("ProductID")).text = "0"
     version = ET.SubElement(creator, q("Version"))
@@ -460,23 +466,25 @@ def fetch_full_records(
 def write_data(
     activities: list[dict[str, Any]], days: int,
     references: dict[str, dict[str, Any]],
+    *, source: str = "Strava API v3 /athlete/activities, /activities/{id}, and /activities/{id}/streams",
+    notes: str = "Full activity detail and high-resolution streams are stored in activity_details/{id}.json; TCX trackpoints are in activity_details/{id}.tcx.",
 ) -> tuple[Path, Path]:
     folder = data_dir()
     folder.mkdir(parents=True, exist_ok=True)
     fetched_at = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     json_path = folder / "activities_42days.json" if days == 42 else folder / f"activities_{days}days.json"
-    csv_path = folder / "activities_42days.csv" if days == 42 else folder / f"activities_{days}days.csv"
     document = {
-        "source": "Strava API v3 /athlete/activities, /activities/{id}, and /activities/{id}/streams",
+        "source": source,
         "fetched_at_utc": fetched_at,
         "window_days": days,
         "activity_count": len(activities),
-        "notes": "Full activity detail and high-resolution streams are stored in activity_details/{id}.json; TCX trackpoints are in activity_details/{id}.tcx.",
+        "notes": notes,
         "activities": [
             {**activity, "local_files": references.get(str(activity.get("id")))}
             for activity in activities
         ],
     }
+    csv_path = folder / "activities_42days.csv" if days == 42 else folder / f"activities_{days}days.csv"
     json_path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
     with csv_path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDS, extrasaction="ignore")
@@ -484,6 +492,83 @@ def write_data(
         for activity in activities:
             writer.writerow({field: activity.get(field) for field in FIELDS})
     return json_path, csv_path
+
+
+def import_fit_directory(
+    input_dir: Path, days: int, *, if_present: bool = False
+) -> tuple[Path | None, Path | None, int, int, int, list[str]]:
+    """Import recent FIT activities and write the same index/detail layout as fetch."""
+    from fit_import import parse_fit_activity
+
+    if not input_dir.is_dir():
+        if if_present:
+            return None, None, 0, 0, 0, []
+        raise RuntimeError(
+            f"FIT input folder does not exist: {input_dir}. Put .fit files there or pass --input."
+        )
+    fit_files = sorted(
+        (path for path in input_dir.rglob("*") if path.is_file() and path.suffix.lower() == ".fit"),
+        key=lambda path: str(path).casefold(),
+    )
+    if not fit_files:
+        if if_present:
+            return None, None, 0, 0, 0, []
+        raise RuntimeError(f"No .fit files found under {input_dir}.")
+
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+    entries: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    parse_errors: list[str] = []
+    seen_ids: set[str] = set()
+    expired_count = 0
+    duplicate_count = 0
+
+    for fit_path in fit_files:
+        try:
+            summary, record = parse_fit_activity(fit_path)
+            activity_id = str(summary["id"])
+            if activity_id in seen_ids:
+                duplicate_count += 1
+                continue
+            seen_ids.add(activity_id)
+            if parse_datetime(str(summary["start_date"])) < cutoff:
+                expired_count += 1
+                continue
+            entries.append((summary, record))
+        except Exception as exc:
+            parse_errors.append(f"{fit_path.name}: {exc}")
+
+    if not entries and parse_errors and expired_count == 0 and duplicate_count == 0:
+        detail = "\n".join(parse_errors[:5])
+        raise RuntimeError(f"No recent FIT activities could be imported.\n{detail}")
+
+    entries.sort(key=lambda entry: parse_datetime(str(entry[0]["start_date"])), reverse=True)
+    activities = [summary for summary, _ in entries]
+    records = [record for _, record in entries]
+
+    references: dict[str, dict[str, Any]] = {}
+    for summary, record in zip(activities, records):
+        activity_id = str(summary["id"])
+        json_path, tcx_path = detail_paths(activity_id)
+        record["summary"] = summary
+        write_record(json_path, record)
+        build_tcx(record, tcx_path, creator_name="Local FIT import")
+        references[activity_id] = {
+            "json": json_path.relative_to(data_dir()).as_posix(),
+            "tcx": tcx_path.relative_to(data_dir()).as_posix(),
+            "status": "complete",
+        }
+
+    json_path, csv_path = write_data(
+        activities,
+        days,
+        references,
+        source="Local FIT file import",
+        notes=(
+            "Activities were parsed from local FIT files. Full activity detail, laps, and available time-series "
+            "streams are stored in activity_details/{id}.json; normalized trackpoints are in activity_details/{id}.tcx."
+        ),
+    )
+    return json_path, csv_path, len(fit_files), expired_count, duplicate_count, parse_errors
 
 
 def prune_expired_records(cutoff: dt.datetime) -> int:
@@ -511,7 +596,7 @@ def prune_expired_records(cutoff: dt.datetime) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Fetch Strava activity summaries for local reading and analysis."
+        description="Fetch Strava activities or import local FIT files for analysis."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("auth", help="Authorize this tool with Strava")
@@ -521,11 +606,24 @@ def main() -> int:
         "--refresh-details", action="store_true",
         help="Re-download details and streams even when a local complete copy exists",
     )
+    fit_parser = subparsers.add_parser(
+        "import-fit", help="Import local FIT files into the same JSON/CSV/TCX layout"
+    )
+    fit_parser.add_argument(
+        "--input", "--input-dir", dest="input_dir", type=Path,
+        default=Path(__file__).resolve().parent / "fit_import",
+        help="Folder containing .fit files (default: ./fit_import)",
+    )
+    fit_parser.add_argument("--days", type=int, default=42, help="Lookback window (default: 42)")
+    fit_parser.add_argument(
+        "--if-present", action="store_true",
+        help="Leave existing data untouched when the input folder has no FIT files",
+    )
     args = parser.parse_args()
     try:
         if args.command == "auth":
             authorize()
-        else:
+        elif args.command == "fetch":
             if args.days < 1 or args.days > 3650:
                 raise RuntimeError("--days must be between 1 and 3650.")
             access = valid_access_token()
@@ -548,6 +646,26 @@ def main() -> int:
             print(f"Per-activity JSON and TCX: {data_dir() / 'activity_details'}")
             if failed_count:
                 print("Some records are incomplete. Check local_files.status in the index; rerun fetch to resume.")
+        else:
+            if args.days < 1 or args.days > 3650:
+                raise RuntimeError("--days must be between 1 and 3650.")
+            json_path, csv_path, file_count, expired_count, duplicate_count, parse_errors = import_fit_directory(
+                args.input_dir, args.days, if_present=args.if_present
+            )
+            if json_path is None or csv_path is None:
+                print(f"No FIT files found in {args.input_dir}; existing activity data was left unchanged.")
+                return 0
+            try:
+                activity_count = json.loads(json_path.read_text(encoding="utf-8"))["activity_count"]
+            except (OSError, ValueError, KeyError) as exc:
+                raise RuntimeError(f"Could not read generated activity index: {exc}") from exc
+            print(f"Scanned {file_count} FIT files; imported {activity_count} activities in the last {args.days} days.")
+            print(f"Skipped outside-window activities: {expired_count}; duplicate files: {duplicate_count}; parse errors: {len(parse_errors)}.")
+            print(f"JSON: {json_path}")
+            print(f"CSV:  {csv_path}")
+            print(f"Per-activity JSON and TCX: {data_dir() / 'activity_details'}")
+            for error in parse_errors:
+                print(f"Skipped invalid FIT: {error}", file=sys.stderr)
     except (RuntimeError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

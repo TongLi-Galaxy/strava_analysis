@@ -1,4 +1,6 @@
 strava_data/
+fit_import/*
+!fit_import/.gitkeep
 __pycache__/
 strava_secrets*.json
 !strava_secrets_sample.json

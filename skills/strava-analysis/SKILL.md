@@ -1,17 +1,19 @@
 ---
 name: strava-analysis
-description: Analyze Strava activity exports and local API data for ride summaries, intervals, power, heart rate, cadence, and training trends. Use when interpreting Strava JSON, CSV, or TCX data.
+description: Import local FIT activities and analyze Strava-shaped JSON, CSV, or TCX data for intervals, power, heart rate, cadence, and training trends.
 ---
 
 # Strava Training Analysis
 
 Use this skill to analyze Strava activity data available in the user's workspace or supplied for the task. Do not fetch or refresh account data unless the user asks.
 
+When this repository is available, run `python strava_tool.py import-fit --if-present --days 42` before reading the activity index, unless the user specifically chose the Strava API dataset or another day window. The program scans `fit_import/`, filters by activity start time, and creates the analysis files; do not ask the model to decode FIT data. If the user supplied a different folder, pass it with `--input`. If no FIT files are present, the command leaves the existing API dataset untouched. Pass the requested day window through `--days` when it differs from 42.
+
 ## Find and read the data
 
-- If the user names a file or date window, start there. Otherwise look for `strava_data/activities_42days.json` or a matching `activities_<days>days.json` index.
+- If the user names a file or date window, start there. Otherwise look for `strava_data/activities_42days.json` or a matching `activities_<days>days.json` index after running the FIT import step above.
 - Read the index first. Each item may have `local_files.json` and `local_files.tcx` paths; resolve them relative to the index/project and read per-activity JSON for detail, laps, and streams.
-- Per-activity JSON is the source for Strava API streams. TCX can help inspect exported trackpoints, but do not claim it contains data that the JSON/API does not expose.
+- Per-activity JSON is the source for available Strava API or FIT streams. TCX can help inspect exported trackpoints, but do not claim it contains data absent from the imported file or API response.
 - For large stream files, compute from only the needed fields locally instead of printing or loading full GPS and sensor arrays into the conversation.
 - If only a CSV or TCX is available, explain which fields or high-resolution streams are unavailable for the requested analysis.
 
