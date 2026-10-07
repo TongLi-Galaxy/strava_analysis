@@ -54,11 +54,11 @@ python .\strava_tool.py fetch
    python .\strava_tool.py import-fit
    ```
 
-默认只保留活动开始时间在当前 UTC 时间往前 42 天内的文件。可用 `--days 90` 改窗口，或用 `--input "D:\Activities\FIT"` 指定其他目录。程序会递归扫描 `.fit` 文件、跳过重复文件，并直接生成与 API 模式相同布局的 `activities_42days.json`、CSV、`activity_details/{id}.json` 和 TCX；FIT 生成的活动 ID 是文件内容的稳定本地标识，索引的 `source` 会标明数据来自 FIT。若最近 42 天没有活动，索引会是空列表。
+默认只保留活动开始时间在当前 UTC 时间往前 42 天内的文件。可用 `--days 90` 改窗口，或用 `--input "D:\Activities\FIT"` 指定其他目录。程序会递归扫描 `.fit` 文件、跳过重复文件，并生成与 API 模式同构的索引、CSV、逐活动 JSON 和 TCX，默认写入 `strava_data/fit_import/`；也可用 `--output` 指定其他输出目录。FIT 生成的活动 ID 是文件内容的稳定本地标识，索引的 `source` 会标明数据来自 FIT。若最近 42 天没有活动，索引会是空列表。
 
 FIT 里实际存在的时间、距离、GPS、海拔、速度、心率、踏频、功率、温度和 laps 会写入对应的 streams/字段；文件没有提供的数据保持缺失。若文件提供本地时间戳，索引会记录 FIT 中的 UTC offset；否则按 UTC 标注。
 
-Codex 在仓库内分析时可先运行 `python .\strava_tool.py import-fit --if-present`：存在默认 FIT 导入目录和文件时，程序自动完成筛选与转换；没有 FIT 文件时，程序不改动现有 API 数据。导入与 API 抓取写入相同的窗口文件名，因此每次运行会更新该窗口索引，不会把两个来源自动合并。原始 FIT 文件不会被修改或删除。
+Codex 在仓库内分析时可先运行 `python .\strava_tool.py import-fit --if-present`：存在默认 FIT 导入目录和文件时，程序自动完成筛选与转换；没有 FIT 文件时，程序不改动现有数据。API 文件保存在 `strava_data/` 根目录，FIT 文件保存在 `strava_data/fit_import/`，索引、活动详情和文件名空间彼此隔离，不会覆盖或合并。原始 FIT 文件不会被修改或删除。
 
 ## 上传到 GitHub
 

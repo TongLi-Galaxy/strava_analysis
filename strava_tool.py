@@ -57,6 +57,11 @@ def data_dir() -> Path:
     return Path(__file__).resolve().parent / "strava_data"
 
 
+def fit_data_dir() -> Path:
+    """Keep manually imported FIT output separate from API-fetched files."""
+    return data_dir() / "fit_import"
+
+
 def client_config_value(key: str, env_name: str) -> str:
     value = os.environ.get(env_name, "").strip()
     if not value:
@@ -368,8 +373,8 @@ def build_tcx(
     ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
 
 
-def detail_paths(activity_id: Any) -> tuple[Path, Path]:
-    folder = data_dir() / "activity_details"
+def detail_paths(activity_id: Any, *, root: Path | None = None) -> tuple[Path, Path]:
+    folder = (root or data_dir()) / "activity_details"
     identifier = str(activity_id)
     return folder / f"{identifier}.json", folder / f"{identifier}.tcx"
 
@@ -468,8 +473,9 @@ def write_data(
     references: dict[str, dict[str, Any]],
     *, source: str = "Strava API v3 /athlete/activities, /activities/{id}, and /activities/{id}/streams",
     notes: str = "Full activity detail and high-resolution streams are stored in activity_details/{id}.json; TCX trackpoints are in activity_details/{id}.tcx.",
+    output_dir: Path | None = None,
 ) -> tuple[Path, Path]:
-    folder = data_dir()
+    folder = output_dir or data_dir()
     folder.mkdir(parents=True, exist_ok=True)
     fetched_at = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     json_path = folder / "activities_42days.json" if days == 42 else folder / f"activities_{days}days.json"
@@ -495,7 +501,8 @@ def write_data(
 
 
 def import_fit_directory(
-    input_dir: Path, days: int, *, if_present: bool = False
+    input_dir: Path, days: int, *, if_present: bool = False,
+    output_dir: Path | None = None,
 ) -> tuple[Path | None, Path | None, int, int, int, list[str]]:
     """Import recent FIT activities and write the same index/detail layout as fetch."""
     from fit_import import parse_fit_activity
@@ -514,6 +521,17 @@ def import_fit_directory(
         if if_present:
             return None, None, 0, 0, 0, []
         raise RuntimeError(f"No .fit files found under {input_dir}.")
+
+    fit_output_dir = (output_dir or fit_data_dir()).resolve()
+    api_dir = data_dir().resolve()
+    isolated_fit_dir = fit_data_dir().resolve()
+    if fit_output_dir == api_dir or (
+        fit_output_dir.is_relative_to(api_dir)
+        and not fit_output_dir.is_relative_to(isolated_fit_dir)
+    ):
+        raise RuntimeError(
+            f"FIT output must be separate from API data; use {isolated_fit_dir} or a folder outside {api_dir}."
+        )
 
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
     entries: list[tuple[dict[str, Any], dict[str, Any]]] = []
@@ -548,13 +566,13 @@ def import_fit_directory(
     references: dict[str, dict[str, Any]] = {}
     for summary, record in zip(activities, records):
         activity_id = str(summary["id"])
-        json_path, tcx_path = detail_paths(activity_id)
+        json_path, tcx_path = detail_paths(activity_id, root=fit_output_dir)
         record["summary"] = summary
         write_record(json_path, record)
         build_tcx(record, tcx_path, creator_name="Local FIT import")
         references[activity_id] = {
-            "json": json_path.relative_to(data_dir()).as_posix(),
-            "tcx": tcx_path.relative_to(data_dir()).as_posix(),
+            "json": json_path.relative_to(fit_output_dir).as_posix(),
+            "tcx": tcx_path.relative_to(fit_output_dir).as_posix(),
             "status": "complete",
         }
 
@@ -567,6 +585,7 @@ def import_fit_directory(
             "Activities were parsed from local FIT files. Full activity detail, laps, and available time-series "
             "streams are stored in activity_details/{id}.json; normalized trackpoints are in activity_details/{id}.tcx."
         ),
+        output_dir=fit_output_dir,
     )
     return json_path, csv_path, len(fit_files), expired_count, duplicate_count, parse_errors
 
@@ -614,6 +633,11 @@ def main() -> int:
         default=Path(__file__).resolve().parent / "fit_import",
         help="Folder containing .fit files (default: ./fit_import)",
     )
+    fit_parser.add_argument(
+        "--output", "--output-dir", dest="output_dir", type=Path,
+        default=None,
+        help="Output folder (default: ./strava_data/fit_import; kept separate from API data)",
+    )
     fit_parser.add_argument("--days", type=int, default=42, help="Lookback window (default: 42)")
     fit_parser.add_argument(
         "--if-present", action="store_true",
@@ -650,7 +674,8 @@ def main() -> int:
             if args.days < 1 or args.days > 3650:
                 raise RuntimeError("--days must be between 1 and 3650.")
             json_path, csv_path, file_count, expired_count, duplicate_count, parse_errors = import_fit_directory(
-                args.input_dir, args.days, if_present=args.if_present
+                args.input_dir, args.days, if_present=args.if_present,
+                output_dir=args.output_dir,
             )
             if json_path is None or csv_path is None:
                 print(f"No FIT files found in {args.input_dir}; existing activity data was left unchanged.")
@@ -663,7 +688,8 @@ def main() -> int:
             print(f"Skipped outside-window activities: {expired_count}; duplicate files: {duplicate_count}; parse errors: {len(parse_errors)}.")
             print(f"JSON: {json_path}")
             print(f"CSV:  {csv_path}")
-            print(f"Per-activity JSON and TCX: {data_dir() / 'activity_details'}")
+            output_root = args.output_dir.resolve() if args.output_dir else fit_data_dir()
+            print(f"Per-activity JSON and TCX: {output_root / 'activity_details'}")
             for error in parse_errors:
                 print(f"Skipped invalid FIT: {error}", file=sys.stderr)
     except (RuntimeError, OSError) as exc:
