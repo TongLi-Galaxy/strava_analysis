@@ -21,10 +21,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
-
-
-# Paste your Strava API Client Secret here, between the quotes.
-
 CALLBACK_URL = "http://localhost:8000/callback"
 TOKEN_URL = "https://www.strava.com/oauth/token"
 AUTHORIZE_URL = "https://www.strava.com/oauth/authorize"

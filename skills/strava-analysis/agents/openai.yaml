@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strava Training Analysis"
+  short_description: "Analyze Strava rides, streams, intervals, and trends"
+  default_prompt: "Use $strava-analysis to analyze my recent rides and summarize training trends."

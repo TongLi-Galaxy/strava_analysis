@@ -5,7 +5,13 @@
 ## 首次授权
 
 1. 在 Strava API 应用设置中将 **Authorization Callback Domain** 设为 `localhost`。
-2. 在仓库根目录创建被 Git 忽略的 `strava_secrets.json`，内容为 `{"client_id": "你的 Client ID", "client_secret": "你的 Client Secret"}`。也可以设置环境变量 `STRAVA_CLIENT_ID` 和 `STRAVA_CLIENT_SECRET`；环境变量优先。不要把真实凭据写入 `strava_tool.py` 或提交到 Git。
+2. 在仓库根目录复制配置模板，再填入自己的 Strava API 凭据：
+
+   ```powershell
+   Copy-Item .\strava_secrets_sample.json .\strava_secrets.json
+   ```
+
+   `strava_secrets.json` 已被 Git 忽略。也可以设置环境变量 `STRAVA_CLIENT_ID` 和 `STRAVA_CLIENT_SECRET`；环境变量优先。不要把真实凭据写入 `strava_tool.py` 或提交到 Git。
 3. 在 PowerShell 中运行授权命令。浏览器会打开 Strava 授权页面；授权后本机回调会自动保存令牌：
 
    ```powershell
@@ -33,7 +39,13 @@ python .\strava_tool.py fetch
 
 这些是 Strava API 提供的活动详情，不等同于设备原始 FIT 文件。TCX 由活动详情和 streams 生成；未上传到 Strava 或 API 未提供的传感器数据不会出现在导出中。单项 JSON 保留完整 API stream 序列，是做细节分析的主要数据源。
 
+## 上传到 GitHub
+
+仓库忽略 `strava_data/` 和 `strava_secrets*.json`，公开模板 `strava_secrets_sample.json` 是例外。活动数据可能包含精确路线、活动时间、心率和功率等个人信息；不要用 `git add -f` 强行提交这些本地文件。
+
 ## 用 Codex 读取与分析
+
+仓库中的 `skills/strava-analysis/` 是可单独安装的 Codex Skill，提供读取 Strava JSON、CSV、TCX 并分析训练数据的指引；Skill 不含个人活动数据或 API 凭据。
 
 让 Codex 先读 `strava_data/activities_42days.json`，再根据每项活动的 `local_files.json` 路径读取完整记录。逐项 JSON 的 `streams` 可能包含：
 

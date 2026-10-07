@@ -1,3 +1,4 @@
 strava_data/
 __pycache__/
-strava_secrets.json
+strava_secrets*.json
+!strava_secrets_sample.json
